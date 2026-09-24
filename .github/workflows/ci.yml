@@ -117,3 +117,57 @@ jobs:
       - name: List Docker images
         run: |
           docker images
+
+  # ==================================================
+  # STAGE 3 - TRIVY SECURITY SCAN
+  # ==================================================
+
+  trivy-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+
+    needs: build
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+      # ---------------------------------------------
+      # 5. Install Trivy
+      # ---------------------------------------------
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      # ---------------------------------------------
+      # 6. Trivy frontend scan
+      # ---------------------------------------------
+      - name: Trivy scan frontend
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --ignore-unfixed \
+            python-frontend:${IMAGE_VERSION}
+
+      # ---------------------------------------------
+      # 7. Trivy backend scan
+      # ---------------------------------------------
+      - name: Trivy scan backend
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --ignore-unfixed \
+            python-backend:${IMAGE_VERSION}
