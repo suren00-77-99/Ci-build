@@ -1,0 +1,82 @@
+name: CI - Lint and Validation
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+jobs:
+
+  lint-and-validate:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ------------------------------------------------
+      # 1. Checkout source code
+      # ------------------------------------------------
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------
+      # 2. Setup Python
+      # ------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # ------------------------------------------------
+      # 3. Install linting tools
+      # ------------------------------------------------
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8
+
+      # ------------------------------------------------
+      # 4. Python syntax validation
+      # ------------------------------------------------
+      - name: Python syntax validation
+        run: |
+          python -m compileall frontend backend
+
+      # ------------------------------------------------
+      # 5. Flake8 - Frontend
+      # ------------------------------------------------
+      - name: Lint frontend
+        run: |
+          flake8 frontend \
+            --exclude=venv,.venv,__pycache__ \
+            --max-line-length=100
+
+      # ------------------------------------------------
+      # 6. Flake8 - Backend
+      # ------------------------------------------------
+      - name: Lint backend
+        run: |
+          flake8 backend \
+            --exclude=venv,.venv,__pycache__ \
+            --max-line-length=100
+
+      # ------------------------------------------------
+      # 7. Validate Dockerfiles
+      # ------------------------------------------------
+      - name: Validate Dockerfiles
+        run: |
+          docker run --rm \
+            -i \
+            hadolint/hadolint \
+            < frontend/Dockerfile
+
+          docker run --rm \
+            -i \
+            hadolint/hadolint \
+            < backend/Dockerfile
