@@ -14,7 +14,7 @@ on:
 jobs:
 
   lint-and-validate:
-
+    name: lint  
     runs-on: ubuntu-latest
 
     steps:
@@ -80,3 +80,40 @@ jobs:
             -i \
             hadolint/hadolint \
             < backend/Dockerfile
+
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+
+    needs: lint
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        run: |
+          echo "IMAGE_VERSION=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Display image tag
+        run: |
+          echo "Image version: $IMAGE_VERSION"
+
+      - name: Build frontend image
+        run: |
+           docker build \
+            -t python-frontend:${IMAGE_VERSION} \
+            -t python-frontend:latest \
+            ./frontend
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t python-backend:${IMAGE_VERSION} \
+            -t python-backend:latest \
+            ./backend
+
+      - name: List Docker images
+        run: |
+          docker images
