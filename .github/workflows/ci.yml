@@ -117,8 +117,24 @@ jobs:
       - name: List Docker images
         run: |
           docker images
+      
+      - name: Save Docker images
+        run: |
+          docker save \
+            python-frontend:${IMAGE_VERSION} \
+            python-frontend:latest \
+            python-backend:${IMAGE_VERSION} \
+            python-backend:latest \
+            -o docker-images.tar
 
-  # ==================================================
+      - name: Upload Docker images
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-images-${{ github.run_number }}
+          path: docker-images.tar
+          retention-days: 1
+
+    # ==================================================
   # STAGE 3 - TRIVY SECURITY SCAN
   # ==================================================
 
@@ -128,12 +144,39 @@ jobs:
 
     needs: build
 
+    env:
+      IMAGE_VERSION: ${{ github.run_number }}
+
     steps:
 
       - name: Checkout source code
         uses: actions/checkout@v4
+
       # ---------------------------------------------
-      # 5. Install Trivy
+      # Download images created by Build job
+      # ---------------------------------------------
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images-${{ github.run_number }}
+
+      # ---------------------------------------------
+      # Load images into Docker
+      # ---------------------------------------------
+      - name: Load Docker images
+        run: |
+          docker load -i docker-images.tar
+
+      # ---------------------------------------------
+      # Verify images
+      # ---------------------------------------------
+      - name: Verify Docker images
+        run: |
+          docker images | grep python-frontend
+          docker images | grep python-backend
+
+      # ---------------------------------------------
+      # Install Trivy
       # ---------------------------------------------
       - name: Install Trivy
         run: |
@@ -151,22 +194,24 @@ jobs:
           sudo apt-get install -y trivy
 
       # ---------------------------------------------
-      # 6. Trivy frontend scan
+      # Trivy frontend scan
       # ---------------------------------------------
       - name: Trivy scan frontend
         run: |
           trivy image \
+            --scanners vuln \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             --ignore-unfixed \
             python-frontend:${IMAGE_VERSION}
 
       # ---------------------------------------------
-      # 7. Trivy backend scan
+      # Trivy backend scan
       # ---------------------------------------------
       - name: Trivy scan backend
         run: |
           trivy image \
+            --scanners vuln \
             --severity HIGH,CRITICAL \
             --exit-code 1 \
             --ignore-unfixed \
