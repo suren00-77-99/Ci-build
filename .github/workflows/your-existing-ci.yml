@@ -1,0 +1,26 @@
+name: Test n8n Integration
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send-to-n8n:
+    name: Send Test Event to n8n
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send GitHub Actions event to n8n
+        run: |
+          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "source": "github-actions",
+              "repository": "${{ github.repository }}",
+              "workflow": "${{ github.workflow }}",
+              "run_id": "${{ github.run_id }}",
+              "run_number": "${{ github.run_number }}",
+              "branch": "${{ github.ref_name }}",
+              "commit": "${{ github.sha }}",
+              "actor": "${{ github.actor }}",
+              "status": "test the machii"
+            }'
