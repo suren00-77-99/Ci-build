@@ -1,4 +1,4 @@
-name: CI - Lint and Validation
+name: CI - Lint Quality Test Build Scan Push
 
 on:
   push:
@@ -11,78 +11,135 @@ on:
 
   workflow_dispatch:
 
+# ============================================================
+# GLOBAL PERMISSIONS
+# ============================================================
+
+permissions:
+  contents: read
+  id-token: write
+
+# ============================================================
+# GLOBAL VARIABLES
+# ============================================================
+
+env:
+  PYTHON_VERSION: "3.12"
+
+  FRONTEND_IMAGE: python-frontend
+  BACKEND_IMAGE: python-backend
+
+  IMAGE_VERSION: ${{ github.run_number }}
+
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  AWS_GITHUB_ROLE_ARN: ${{ vars.AWS_GITHUB_ROLE_ARN }}
+
+  ECR_FRONTEND_REPO: python-frontend
+  ECR_BACKEND_REPO: python-backend
+
+
 jobs:
 
+# ============================================================
+# STAGE 1 - LINT & VALIDATION
+# ============================================================
+
   lint-and-validate:
-    name: lint  
+
+    name: Lint and Validation
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # ------------------------------------------------
-      # 1. Checkout source code
-      # ------------------------------------------------
+      # --------------------------------------------------------
+      # Checkout
+      # --------------------------------------------------------
+
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # ------------------------------------------------
-      # 2. Setup Python
-      # ------------------------------------------------
+
+      # --------------------------------------------------------
+      # Setup Python
+      # --------------------------------------------------------
+
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      # ------------------------------------------------
-      # 3. Install linting tools
-      # ------------------------------------------------
-      - name: Install linting tools
+
+      # --------------------------------------------------------
+      # Install lint tools
+      # --------------------------------------------------------
+
+      - name: Install lint tools
         run: |
           python -m pip install --upgrade pip
           pip install flake8
 
-      # ------------------------------------------------
-      # 4. Python syntax validation
-      # ------------------------------------------------
+
+      # --------------------------------------------------------
+      # Python syntax validation
+      # --------------------------------------------------------
+
       - name: Python syntax validation
         run: |
           python -m compileall frontend backend
 
-      # ------------------------------------------------
-      # 5. Flake8 - Frontend
-      # ------------------------------------------------
+
+      # --------------------------------------------------------
+      # Flake8 - frontend
+      # --------------------------------------------------------
+
       - name: Lint frontend
         run: |
           flake8 frontend \
             --exclude=venv,.venv,__pycache__ \
             --max-line-length=100
 
-      # ------------------------------------------------
-      # 6. Flake8 - Backend
-      # ------------------------------------------------
+
+      # --------------------------------------------------------
+      # Flake8 - backend
+      # --------------------------------------------------------
+
       - name: Lint backend
         run: |
           flake8 backend \
             --exclude=venv,.venv,__pycache__ \
             --max-line-length=100
 
-      # ------------------------------------------------
-      # 7. Validate Dockerfiles
-      # ------------------------------------------------
-      - name: Validate Dockerfiles
+
+      # --------------------------------------------------------
+      # Dockerfile validation
+      # --------------------------------------------------------
+
+      - name: Validate frontend Dockerfile
         run: |
           docker run --rm \
             -i \
             hadolint/hadolint \
             < frontend/Dockerfile
 
+
+      - name: Validate backend Dockerfile
+        run: |
           docker run --rm \
             -i \
             hadolint/hadolint \
             < backend/Dockerfile
 
-  build:
-    name: Build Docker Images
+
+# ============================================================
+# STAGE 2 - CODE QUALITY
+# ============================================================
+
+  code-quality:
+
+    name: Code Quality
+
     runs-on: ubuntu-latest
 
     needs: lint-and-validate
@@ -92,40 +149,213 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Set image tag
-        run: |
-          echo "IMAGE_VERSION=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
 
-      - name: Display image tag
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+
+      - name: Install quality tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pylint
+
+
+      # --------------------------------------------------------
+      # Pylint frontend
+      # --------------------------------------------------------
+
+      - name: Code quality - frontend
+        run: |
+          pylint frontend \
+            --disable=C0114,C0115,C0116 \
+            --output-format=text \
+            > frontend-quality.log || true
+
+
+      # --------------------------------------------------------
+      # Pylint backend
+      # --------------------------------------------------------
+
+      - name: Code quality - backend
+        run: |
+          pylint backend \
+            --disable=C0114,C0115,C0116 \
+            --output-format=text \
+            > backend-quality.log || true
+
+
+      # --------------------------------------------------------
+      # Display results
+      # --------------------------------------------------------
+
+      - name: Display code quality results
+        run: |
+          echo "===== FRONTEND ====="
+          cat frontend-quality.log
+
+          echo "===== BACKEND ====="
+          cat backend-quality.log
+
+
+      # --------------------------------------------------------
+      # Upload quality reports
+      # --------------------------------------------------------
+
+      - name: Upload code quality reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-quality-${{ github.run_number }}
+          path: |
+            frontend-quality.log
+            backend-quality.log
+          retention-days: 7
+
+
+# ============================================================
+# STAGE 3 - UNIT TESTS
+# ============================================================
+
+  unit-tests:
+
+    name: Unit Tests
+
+    runs-on: ubuntu-latest
+
+    needs: code-quality
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+          pip install pytest pytest-cov
+
+
+      # --------------------------------------------------------
+      # Run tests
+      # --------------------------------------------------------
+
+      - name: Run unit tests
+        run: |
+          mkdir -p test-results
+
+          pytest \
+            frontend \
+            backend \
+            --junitxml=test-results/test-results.xml \
+            --cov=frontend \
+            --cov=backend \
+            --cov-report=term \
+            --cov-report=xml:test-results/coverage.xml
+
+
+      # --------------------------------------------------------
+      # Upload test reports
+      # --------------------------------------------------------
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results-${{ github.run_number }}
+          path: test-results/
+          retention-days: 7
+
+
+# ============================================================
+# STAGE 4 - BUILD DOCKER IMAGES
+# ============================================================
+
+  build:
+
+    name: Build Docker Images
+
+    runs-on: ubuntu-latest
+
+    needs: unit-tests
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # Display image version
+      # --------------------------------------------------------
+
+      - name: Display image version
         run: |
           echo "Image version: $IMAGE_VERSION"
 
+
+      # --------------------------------------------------------
+      # Build frontend
+      # --------------------------------------------------------
+
       - name: Build frontend image
         run: |
-           docker build \
-            -t python-frontend:${IMAGE_VERSION} \
-            -t python-frontend:latest \
+          docker build \
+            -t $FRONTEND_IMAGE:$IMAGE_VERSION \
+            -t $FRONTEND_IMAGE:latest \
             ./frontend
+
+
+      # --------------------------------------------------------
+      # Build backend
+      # --------------------------------------------------------
 
       - name: Build backend image
         run: |
           docker build \
-            -t python-backend:${IMAGE_VERSION} \
-            -t python-backend:latest \
+            -t $BACKEND_IMAGE:$IMAGE_VERSION \
+            -t $BACKEND_IMAGE:latest \
             ./backend
+
+
+      # --------------------------------------------------------
+      # Verify images
+      # --------------------------------------------------------
 
       - name: List Docker images
         run: |
           docker images
-      
+
+
+      # --------------------------------------------------------
+      # Save images
+      # --------------------------------------------------------
+
       - name: Save Docker images
         run: |
           docker save \
-            python-frontend:${IMAGE_VERSION} \
-            python-frontend:latest \
-            python-backend:${IMAGE_VERSION} \
-            python-backend:latest \
+            $FRONTEND_IMAGE:$IMAGE_VERSION \
+            $FRONTEND_IMAGE:latest \
+            $BACKEND_IMAGE:$IMAGE_VERSION \
+            $BACKEND_IMAGE:latest \
             -o docker-images.tar
+
+
+      # --------------------------------------------------------
+      # Upload Docker artifact
+      # --------------------------------------------------------
 
       - name: Upload Docker images
         uses: actions/upload-artifact@v4
@@ -134,85 +364,398 @@ jobs:
           path: docker-images.tar
           retention-days: 1
 
-    # ==================================================
-  # STAGE 3 - TRIVY SECURITY SCAN
-  # ==================================================
+
+# ============================================================
+# STAGE 5 - TRIVY SECURITY SCAN
+# ============================================================
 
   trivy-scan:
+
     name: Trivy Security Scan
+
     runs-on: ubuntu-latest
 
     needs: build
-
-    env:
-      IMAGE_VERSION: ${{ github.run_number }}
 
     steps:
 
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      # ---------------------------------------------
-      # Download images created by Build job
-      # ---------------------------------------------
+
+      # --------------------------------------------------------
+      # Download Docker images
+      # --------------------------------------------------------
+
       - name: Download Docker images
         uses: actions/download-artifact@v4
         with:
           name: docker-images-${{ github.run_number }}
 
-      # ---------------------------------------------
-      # Load images into Docker
-      # ---------------------------------------------
+
+      # --------------------------------------------------------
+      # Load Docker images
+      # --------------------------------------------------------
+
       - name: Load Docker images
         run: |
           docker load -i docker-images.tar
 
-      # ---------------------------------------------
+
+      # --------------------------------------------------------
       # Verify images
-      # ---------------------------------------------
+      # --------------------------------------------------------
+
       - name: Verify Docker images
         run: |
-          docker images | grep python-frontend
-          docker images | grep python-backend
+          docker images | grep $FRONTEND_IMAGE
+          docker images | grep $BACKEND_IMAGE
 
-      # ---------------------------------------------
+
+      # --------------------------------------------------------
       # Install Trivy
-      # ---------------------------------------------
+      # --------------------------------------------------------
+
       - name: Install Trivy
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
 
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+          sudo apt-get install -y \
+            wget \
+            apt-transport-https \
+            gnupg \
+            lsb-release
+
+          wget -qO - \
+            https://aquasecurity.github.io/trivy-repo/deb/public.key \
             | gpg --dearmor \
             | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
 
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" \
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] \
+            https://aquasecurity.github.io/trivy-repo/deb \
+            $(lsb_release -sc) main" \
             | sudo tee /etc/apt/sources.list.d/trivy.list
 
           sudo apt-get update
+
           sudo apt-get install -y trivy
 
-      # ---------------------------------------------
-      # Trivy frontend scan
-      # ---------------------------------------------
+
+      # --------------------------------------------------------
+      # Trivy frontend
+      # --------------------------------------------------------
+
       - name: Trivy scan frontend
         run: |
+          mkdir -p trivy-results
+
           trivy image \
             --scanners vuln \
             --severity HIGH,CRITICAL \
-            --exit-code 1 \
             --ignore-unfixed \
-            python-frontend:${IMAGE_VERSION}
+            --format json \
+            --output trivy-results/frontend.json \
+            $FRONTEND_IMAGE:$IMAGE_VERSION
 
-      # ---------------------------------------------
-      # Trivy backend scan
-      # ---------------------------------------------
+          trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            $FRONTEND_IMAGE:$IMAGE_VERSION
+
+
+      # --------------------------------------------------------
+      # Trivy backend
+      # --------------------------------------------------------
+
       - name: Trivy scan backend
         run: |
           trivy image \
             --scanners vuln \
             --severity HIGH,CRITICAL \
-            --exit-code 1 \
             --ignore-unfixed \
-            python-backend:${IMAGE_VERSION}
+            --format json \
+            --output trivy-results/backend.json \
+            $BACKEND_IMAGE:$IMAGE_VERSION
+
+          trivy image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            $BACKEND_IMAGE:$IMAGE_VERSION
+
+
+      # --------------------------------------------------------
+      # Upload Trivy reports
+      # --------------------------------------------------------
+
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ github.run_number }}
+          path: trivy-results/
+          retention-days: 7
+
+
+# ============================================================
+# STAGE 6 - PIPELINE LOGS / ARTIFACTS
+# ============================================================
+
+  pipeline-artifacts:
+
+    name: Store Pipeline Logs
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - lint-and-validate
+      - code-quality
+      - unit-tests
+      - build
+      - trivy-scan
+
+    if: always()
+
+    steps:
+
+      - name: Create pipeline information
+        run: |
+          mkdir -p pipeline-logs
+
+          cat > pipeline-logs/pipeline-info.txt << EOF
+          Repository: ${{ github.repository }}
+          Workflow: ${{ github.workflow }}
+          Run Number: ${{ github.run_number }}
+          Run ID: ${{ github.run_id }}
+          Branch: ${{ github.ref_name }}
+          Commit: ${{ github.sha }}
+          Actor: ${{ github.actor }}
+          Status: ${{ job.status }}
+          EOF
+
+
+      - name: Upload pipeline logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs-${{ github.run_number }}
+          path: pipeline-logs/
+          retention-days: 7
+
+
+# ============================================================
+# STAGE 7 - CREATE ECR + PUSH IMAGES
+# ============================================================
+
+  push-ecr:
+
+    name: Create ECR and Push Images
+
+    runs-on: ubuntu-latest
+
+    needs: trivy-scan
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------------
+      # Download Docker images
+      # --------------------------------------------------------
+
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images-${{ github.run_number }}
+
+
+      # --------------------------------------------------------
+      # Load Docker images
+      # --------------------------------------------------------
+
+      - name: Load Docker images
+        run: |
+          docker load -i docker-images.tar
+
+
+      # --------------------------------------------------------
+      # Configure AWS
+      # --------------------------------------------------------
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_GITHUB_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      # --------------------------------------------------------
+      # Verify AWS account
+      # --------------------------------------------------------
+
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+
+
+      # --------------------------------------------------------
+      # Create frontend ECR repository
+      # --------------------------------------------------------
+
+      - name: Create frontend ECR repository if missing
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "$ECR_FRONTEND_REPO" \
+            --region "$AWS_REGION" \
+          || aws ecr create-repository \
+            --repository-name "$ECR_FRONTEND_REPO" \
+            --region "$AWS_REGION"
+
+
+      # --------------------------------------------------------
+      # Create backend ECR repository
+      # --------------------------------------------------------
+
+      - name: Create backend ECR repository if missing
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "$ECR_BACKEND_REPO" \
+            --region "$AWS_REGION" \
+          || aws ecr create-repository \
+            --repository-name "$ECR_BACKEND_REPO" \
+            --region "$AWS_REGION"
+
+
+      # --------------------------------------------------------
+      # Login to ECR
+      # --------------------------------------------------------
+
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password \
+            --region "$AWS_REGION" \
+            | docker login \
+            --username AWS \
+            --password-stdin \
+            "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+
+      # --------------------------------------------------------
+      # Tag frontend image
+      # --------------------------------------------------------
+
+      - name: Tag frontend image
+        run: |
+          docker tag \
+            $FRONTEND_IMAGE:$IMAGE_VERSION \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:$IMAGE_VERSION
+
+          docker tag \
+            $FRONTEND_IMAGE:latest \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:latest
+
+
+      # --------------------------------------------------------
+      # Tag backend image
+      # --------------------------------------------------------
+
+      - name: Tag backend image
+        run: |
+          docker tag \
+            $BACKEND_IMAGE:$IMAGE_VERSION \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:$IMAGE_VERSION
+
+          docker tag \
+            $BACKEND_IMAGE:latest \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:latest
+
+
+      # --------------------------------------------------------
+      # Push frontend
+      # --------------------------------------------------------
+
+      - name: Push frontend image
+        run: |
+          docker push \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:$IMAGE_VERSION
+
+          docker push \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_FRONTEND_REPO:latest
+
+
+      # --------------------------------------------------------
+      # Push backend
+      # --------------------------------------------------------
+
+      - name: Push backend image
+        run: |
+          docker push \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:$IMAGE_VERSION
+
+          docker push \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_BACKEND_REPO:latest
+
+
+      # --------------------------------------------------------
+      # Verify ECR images
+      # --------------------------------------------------------
+
+      - name: Verify ECR images
+        run: |
+          echo "Frontend images:"
+          aws ecr describe-images \
+            --repository-name "$ECR_FRONTEND_REPO" \
+            --region "$AWS_REGION"
+
+          echo "Backend images:"
+          aws ecr describe-images \
+            --repository-name "$ECR_BACKEND_REPO" \
+            --region "$AWS_REGION"
+
+
+# ============================================================
+# STAGE 8 - FAILURE NOTIFICATION TO N8N
+# ============================================================
+
+  notify-n8n:
+
+    name: Send Failure to n8n
+
+    if: ${{ failure() }}
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - lint-and-validate
+      - code-quality
+      - unit-tests
+      - build
+      - trivy-scan
+      - pipeline-artifacts
+      - push-ecr
+
+    steps:
+
+      - name: Send pipeline failure to n8n
+        run: |
+
+          curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "repository": "${{ github.repository }}",
+              "workflow": "${{ github.workflow }}",
+              "run_id": "${{ github.run_id }}",
+              "run_number": "${{ github.run_number }}",
+              "branch": "${{ github.ref_name }}",
+              "commit": "${{ github.sha }}",
+              "actor": "${{ github.actor }}",
+              "status": "failure"
+            }'
