@@ -4,8 +4,8 @@ on:
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/ci.yml"
+    #paths:
+     # - ".github/workflows/ci.yml"
 
 
   pull_request:
@@ -747,18 +747,19 @@ jobs:
 
     steps:
 
-      - name: Send pipeline failure to n8n
+      - name: Notify n8n
+        if: always()
         run: |
-
           curl -X POST "${{ secrets.N8N_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
             -d '{
               "repository": "${{ github.repository }}",
+              "branch": "${{ github.ref_name }}",
+              "commit": "${{ github.sha }}",
+              "commit_message": "${{ github.event.head_commit.message }}",
+              "actor": "${{ github.actor }}",
               "workflow": "${{ github.workflow }}",
               "run_id": "${{ github.run_id }}",
               "run_number": "${{ github.run_number }}",
-              "branch": "${{ github.ref_name }}",
-              "commit": "${{ github.sha }}",
-              "actor": "${{ github.actor }}",
-              "status": "failure"
+              "status": "${{ job.status }}"
             }'
