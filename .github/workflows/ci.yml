@@ -260,6 +260,7 @@ jobs:
           mkdir -p test-results
 
           pytest \
+            --import-mode=importlib \
             frontend \
             backend \
             --junitxml=test-results/test-results.xml \
